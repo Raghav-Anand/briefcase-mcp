@@ -1,16 +1,20 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"sync"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -18,45 +22,50 @@ const (
 	googleTokenURL = "https://oauth2.googleapis.com/token"
 	oauthCodeTTL   = 5 * time.Minute
 	oauthStateTTL  = 10 * time.Minute
+
+	oauthStatesCollection = "oauth_states"
+	oauthCodesCollection  = "oauth_codes"
 )
 
-// pendingState stores PKCE and redirect info for a pending authorization request.
-type pendingState struct {
-	codeChallenge string // base64url(SHA256(codeVerifier)), method=S256
-	redirectURI   string // Claude client callback URL
-	clientID      string
-	clientState   string // MCP client's state param (passed through)
-	createdAt     time.Time
+// firestoreState is the Firestore representation of a pending OAuth state.
+type firestoreState struct {
+	CodeChallenge string    `firestore:"code_challenge"`
+	RedirectURI   string    `firestore:"redirect_uri"`
+	ClientID      string    `firestore:"client_id"`
+	ClientState   string    `firestore:"client_state"`
+	CreatedAt     time.Time `firestore:"created_at"`
 }
 
-// pendingCode stores the Google ID token awaiting exchange at /oauth/token.
-type pendingCode struct {
-	accessToken string // Google ID token — used directly by the middleware
-	redirectURI string
-	createdAt   time.Time
+// firestoreCode is the Firestore representation of a pending auth code.
+type firestoreCode struct {
+	AccessToken string    `firestore:"access_token"`
+	RedirectURI string    `firestore:"redirect_uri"`
+	CreatedAt   time.Time `firestore:"created_at"`
 }
 
 // OAuthHandler implements the MCP OAuth 2.0 authorization server endpoints.
+// States and codes are persisted in Firestore so the flow works correctly
+// across multiple Cloud Run instances.
 type OAuthHandler struct {
-	mu           sync.Mutex
-	states       map[string]pendingState
-	codes        map[string]pendingCode
 	serverURL    string
 	clientID     string
 	clientSecret string
+	fs           *firestore.Client
 }
 
 // NewOAuthHandler creates a handler with config from environment variables.
-func NewOAuthHandler() *OAuthHandler {
-	h := &OAuthHandler{
-		states:       make(map[string]pendingState),
-		codes:        make(map[string]pendingCode),
+func NewOAuthHandler(ctx context.Context) *OAuthHandler {
+	projectID := os.Getenv("GCP_PROJECT_ID")
+	fs, err := firestore.NewClient(ctx, projectID)
+	if err != nil {
+		log.Fatalf("auth.NewOAuthHandler: firestore.NewClient: %v", err)
+	}
+	return &OAuthHandler{
 		serverURL:    os.Getenv("MCP_SERVER_URL"),
 		clientID:     os.Getenv("OAUTH_CLIENT_ID"),
 		clientSecret: os.Getenv("OAUTH_CLIENT_SECRET"),
+		fs:           fs,
 	}
-	go h.periodicCleanup()
-	return h
 }
 
 // ServeWellKnown handles GET /.well-known/oauth-authorization-server (RFC 8414).
@@ -79,7 +88,7 @@ func (h *OAuthHandler) ServeWellKnown(w http.ResponseWriter, r *http.Request) {
 // ServeRegister handles POST /oauth/register (RFC 7591 dynamic client registration).
 // Claude Code and other MCP clients require this to self-register before the OAuth flow.
 // Since we proxy all auth through Google OAuth using our own server credentials, we
-// accept any registration and echo back a stable client_id derived from the request.
+// accept any registration and return a stable client_id.
 func (h *OAuthHandler) ServeRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -107,17 +116,17 @@ func (h *OAuthHandler) ServeRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{
-		"client_id":                 clientID,
-		"client_id_issued_at":       time.Now().Unix(),
-		"redirect_uris":             req.RedirectURIs,
-		"grant_types":               req.GrantTypes,
-		"response_types":            req.ResponseTypes,
+		"client_id":                  clientID,
+		"client_id_issued_at":        time.Now().Unix(),
+		"redirect_uris":              req.RedirectURIs,
+		"grant_types":                req.GrantTypes,
+		"response_types":             req.ResponseTypes,
 		"token_endpoint_auth_method": "none",
 	})
 }
 
 // ServeAuthorize handles GET /oauth/authorize.
-// Stores PKCE state and redirects the user to Google OAuth.
+// Stores PKCE state in Firestore and redirects the user to Google OAuth.
 func (h *OAuthHandler) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	codeChallenge := q.Get("code_challenge")
@@ -136,15 +145,18 @@ func (h *OAuthHandler) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ourState := uuid.New().String()
-	h.mu.Lock()
-	h.states[ourState] = pendingState{
-		codeChallenge: codeChallenge,
-		redirectURI:   redirectURI,
-		clientID:      clientID,
-		clientState:   clientState,
-		createdAt:     time.Now(),
+	_, err := h.fs.Collection(oauthStatesCollection).Doc(ourState).Set(r.Context(), firestoreState{
+		CodeChallenge: codeChallenge,
+		RedirectURI:   redirectURI,
+		ClientID:      clientID,
+		ClientState:   clientState,
+		CreatedAt:     time.Now(),
+	})
+	if err != nil {
+		log.Printf("ServeAuthorize: store state: %v", err)
+		http.Error(w, "failed to store state", http.StatusInternalServerError)
+		return
 	}
-	h.mu.Unlock()
 
 	params := url.Values{
 		"client_id":     {h.clientID},
@@ -158,7 +170,7 @@ func (h *OAuthHandler) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
 
 // ServeCallback handles GET /oauth/callback (Google redirects here after auth).
 // Exchanges the Google auth code for a Google ID token and stores it for the
-// /oauth/token exchange. No Firebase involved.
+// /oauth/token exchange.
 func (h *OAuthHandler) ServeCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ourState := q.Get("state")
@@ -174,38 +186,55 @@ func (h *OAuthHandler) ServeCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	pending, ok := h.states[ourState]
-	delete(h.states, ourState)
-	h.mu.Unlock()
+	// Fetch and delete the pending state from Firestore.
+	stateRef := h.fs.Collection(oauthStatesCollection).Doc(ourState)
+	doc, err := stateRef.Get(r.Context())
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			http.Error(w, "unknown or expired state", http.StatusBadRequest)
+		} else {
+			log.Printf("ServeCallback: get state: %v", err)
+			http.Error(w, "failed to retrieve state", http.StatusInternalServerError)
+		}
+		return
+	}
+	var pending firestoreState
+	if err := doc.DataTo(&pending); err != nil {
+		log.Printf("ServeCallback: decode state: %v", err)
+		http.Error(w, "failed to decode state", http.StatusInternalServerError)
+		return
+	}
+	stateRef.Delete(r.Context())
 
-	if !ok {
-		http.Error(w, "unknown or expired state", http.StatusBadRequest)
+	if time.Since(pending.CreatedAt) > oauthStateTTL {
+		http.Error(w, "state expired", http.StatusBadRequest)
 		return
 	}
 
-	// Exchange Google auth code for a Google ID token. Store it directly —
-	// the middleware validates it using Google's public JWKS, no Firebase needed.
 	googleIDToken, err := h.exchangeGoogleCode(googleCode)
 	if err != nil {
+		log.Printf("ServeCallback: exchange Google code: %v", err)
 		http.Error(w, "failed to exchange Google code: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	authCode := uuid.New().String()
-	h.mu.Lock()
-	h.codes[authCode] = pendingCode{
-		accessToken: googleIDToken,
-		redirectURI: pending.redirectURI,
-		createdAt:   time.Now(),
+	_, err = h.fs.Collection(oauthCodesCollection).Doc(authCode).Set(r.Context(), firestoreCode{
+		AccessToken: googleIDToken,
+		RedirectURI: pending.RedirectURI,
+		CreatedAt:   time.Now(),
+	})
+	if err != nil {
+		log.Printf("ServeCallback: store code: %v", err)
+		http.Error(w, "failed to store auth code", http.StatusInternalServerError)
+		return
 	}
-	h.mu.Unlock()
 
 	params := url.Values{
 		"code":  {authCode},
-		"state": {pending.clientState},
+		"state": {pending.ClientState},
 	}
-	http.Redirect(w, r, pending.redirectURI+"?"+params.Encode(), http.StatusFound)
+	http.Redirect(w, r, pending.RedirectURI+"?"+params.Encode(), http.StatusFound)
 }
 
 // ServeToken handles POST /oauth/token.
@@ -227,18 +256,29 @@ func (h *OAuthHandler) ServeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.mu.Lock()
-	pending, ok := h.codes[code]
-	delete(h.codes, code)
-	h.mu.Unlock()
-
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+	// Fetch and delete the pending code from Firestore.
+	codeRef := h.fs.Collection(oauthCodesCollection).Doc(code)
+	doc, err := codeRef.Get(r.Context())
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+		} else {
+			log.Printf("ServeToken: get code: %v", err)
+			http.Error(w, "failed to retrieve code", http.StatusInternalServerError)
+		}
 		return
 	}
-	if time.Since(pending.createdAt) > oauthCodeTTL {
+	var pending firestoreCode
+	if err := doc.DataTo(&pending); err != nil {
+		log.Printf("ServeToken: decode code: %v", err)
+		http.Error(w, "failed to decode code", http.StatusInternalServerError)
+		return
+	}
+	codeRef.Delete(r.Context())
+
+	if time.Since(pending.CreatedAt) > oauthCodeTTL {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant", "error_description": "code expired"})
@@ -247,7 +287,7 @@ func (h *OAuthHandler) ServeToken(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"access_token": pending.accessToken,
+		"access_token": pending.AccessToken,
 		"token_type":   "Bearer",
 		"expires_in":   3600,
 	})
@@ -284,27 +324,6 @@ func (h *OAuthHandler) exchangeGoogleCode(code string) (string, error) {
 		return "", fmt.Errorf("no id_token in Google token response")
 	}
 	return result.IDToken, nil
-}
-
-// periodicCleanup removes expired states and codes.
-func (h *OAuthHandler) periodicCleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		h.mu.Lock()
-		for k, v := range h.states {
-			if now.Sub(v.createdAt) > oauthStateTTL {
-				delete(h.states, k)
-			}
-		}
-		for k, v := range h.codes {
-			if now.Sub(v.createdAt) > oauthCodeTTL {
-				delete(h.codes, k)
-			}
-		}
-		h.mu.Unlock()
-	}
 }
 
 // RegisterRoutes mounts OAuth endpoints on the given mux.

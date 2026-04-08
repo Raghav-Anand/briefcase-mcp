@@ -66,7 +66,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// OAuth 2.0 endpoints (unauthenticated — used during login).
-	oauthHandler := auth.NewOAuthHandler()
+	oauthHandler := auth.NewOAuthHandler(ctx)
 	oauthHandler.RegisterRoutes(mux)
 
 	// MCP endpoint — requires a valid Google ID token.
