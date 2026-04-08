@@ -66,6 +66,7 @@ func (h *OAuthHandler) ServeWellKnown(w http.ResponseWriter, r *http.Request) {
 		"issuer":                                base,
 		"authorization_endpoint":                base + "/oauth/authorize",
 		"token_endpoint":                        base + "/oauth/token",
+		"registration_endpoint":                 base + "/oauth/register",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"code_challenge_methods_supported":      []string{"S256"},
@@ -73,6 +74,46 @@ func (h *OAuthHandler) ServeWellKnown(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metadata)
+}
+
+// ServeRegister handles POST /oauth/register (RFC 7591 dynamic client registration).
+// Claude Code and other MCP clients require this to self-register before the OAuth flow.
+// Since we proxy all auth through Google OAuth using our own server credentials, we
+// accept any registration and echo back a stable client_id derived from the request.
+func (h *OAuthHandler) ServeRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		RedirectURIs            []string `json:"redirect_uris"`
+		ClientName              string   `json:"client_name"`
+		GrantTypes              []string `json:"grant_types"`
+		ResponseTypes           []string `json:"response_types"`
+		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.RedirectURIs) == 0 {
+		http.Error(w, `{"error":"invalid_client_metadata","error_description":"redirect_uris required"}`, http.StatusBadRequest)
+		return
+	}
+
+	clientID := uuid.New().String()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{
+		"client_id":                 clientID,
+		"client_id_issued_at":       time.Now().Unix(),
+		"redirect_uris":             req.RedirectURIs,
+		"grant_types":               req.GrantTypes,
+		"response_types":            req.ResponseTypes,
+		"token_endpoint_auth_method": "none",
+	})
 }
 
 // ServeAuthorize handles GET /oauth/authorize.
@@ -269,6 +310,7 @@ func (h *OAuthHandler) periodicCleanup() {
 // RegisterRoutes mounts OAuth endpoints on the given mux.
 func (h *OAuthHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/.well-known/oauth-authorization-server", h.ServeWellKnown)
+	mux.HandleFunc("/oauth/register", h.ServeRegister)
 	mux.HandleFunc("/oauth/authorize", h.ServeAuthorize)
 	mux.HandleFunc("/oauth/callback", h.ServeCallback)
 	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
