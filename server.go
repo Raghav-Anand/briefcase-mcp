@@ -39,6 +39,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithPromptCapabilities(false),
 		mcpserver.WithRecovery(),
+		mcpserver.WithInstructions("If the Briefcase MCP server requires authentication, call the authenticate tool to get the OAuth URL, then immediately open it in the user's browser using the Bash tool: run `open <url>` on macOS or `xdg-open <url>` on Linux. Do not ask the user to open it manually."),
 	)
 
 	// --- System prompt ---

@@ -15,15 +15,17 @@ import (
 // ── In-memory store for tests ─────────────────────────────────────────────────
 
 type memStore struct {
-	mu     sync.Mutex
-	states map[string]pendingState
-	codes  map[string]pendingCode
+	mu            sync.Mutex
+	states        map[string]pendingState
+	codes         map[string]pendingCode
+	refreshTokens map[string]storedRefreshToken
 }
 
 func newMemStore() *memStore {
 	return &memStore{
-		states: make(map[string]pendingState),
-		codes:  make(map[string]pendingCode),
+		states:        make(map[string]pendingState),
+		codes:         make(map[string]pendingCode),
+		refreshTokens: make(map[string]storedRefreshToken),
 	}
 }
 
@@ -59,6 +61,20 @@ func (m *memStore) getAndDeleteCode(_ context.Context, key string) (pendingCode,
 		delete(m.codes, key)
 	}
 	return c, ok, nil
+}
+
+func (m *memStore) saveRefreshToken(_ context.Context, key string, googleRefreshToken string) error {
+	m.mu.Lock()
+	m.refreshTokens[key] = storedRefreshToken{GoogleRefreshToken: googleRefreshToken, CreatedAt: time.Now()}
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *memStore) getRefreshToken(_ context.Context, key string) (storedRefreshToken, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.refreshTokens[key]
+	return t, ok, nil
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -211,9 +227,10 @@ func TestServeToken_ValidCode(t *testing.T) {
 	h, store := newTestHandler()
 
 	store.saveCode(context.Background(), "good-code", pendingCode{
-		AccessToken: "google-id-token-xyz",
-		RedirectURI: "https://claude.ai/cb",
-		CreatedAt:   time.Now(),
+		AccessToken:  "google-id-token-xyz",
+		RefreshToken: "our-refresh-token",
+		RedirectURI:  "https://claude.ai/cb",
+		CreatedAt:    time.Now(),
 	})
 
 	form := url.Values{
@@ -244,6 +261,51 @@ func TestServeToken_ValidCode(t *testing.T) {
 	store.mu.Unlock()
 	if stillExists {
 		t.Error("auth code should be deleted after successful exchange")
+	}
+}
+
+func TestServeToken_ValidCode_IncludesRefreshToken(t *testing.T) {
+	h, store := newTestHandler()
+
+	store.saveCode(context.Background(), "code-with-refresh", pendingCode{
+		AccessToken:  "id-token",
+		RefreshToken: "our-refresh-token",
+		RedirectURI:  "https://claude.ai/cb",
+		CreatedAt:    time.Now(),
+	})
+
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {"code-with-refresh"}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeToken(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["refresh_token"] != "our-refresh-token" {
+		t.Errorf("expected refresh_token in response, got: %v", resp["refresh_token"])
+	}
+}
+
+func TestServeToken_RefreshToken_Invalid(t *testing.T) {
+	h, _ := newTestHandler()
+
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"bogus"}}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeToken(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid refresh token, got %d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] != "invalid_grant" {
+		t.Errorf("expected invalid_grant, got: %v", resp["error"])
 	}
 }
 
