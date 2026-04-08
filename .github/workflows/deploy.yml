@@ -1,0 +1,146 @@
+name: Deploy MCP Server
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # needed to push tags
+  id-token: write  # needed for Workload Identity Federation
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Configure git for private modules
+        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Run tests
+        env:
+          GOPRIVATE: github.com/raghav-anand/*
+          GONOSUMCHECK: github.com/raghav-anand/*
+        run: go test ./...
+
+  tag:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history to find existing tags
+
+      - name: Bump version based on conventional commits and push tag
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # If HEAD is already tagged (e.g. deploy failed and workflow was re-run),
+          # reuse the existing tag rather than creating a new one.
+          EXISTING=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$EXISTING" ]; then
+            echo "HEAD already tagged as $EXISTING, reusing"
+            echo "version=$EXISTING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Find the latest semver tag; default to v0.0.0 if none exists.
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)
+          MAJOR=0; MINOR=0; PATCH=0
+          if [ -n "$LATEST" ]; then
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d 'v')
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+          fi
+
+          # Collect commits since the last tag (or all commits if no tag yet).
+          if [ -n "$LATEST" ]; then
+            COMMITS=$(git log "${LATEST}..HEAD" --format="%s%n%b")
+          else
+            COMMITS=$(git log --format="%s%n%b")
+          fi
+
+          # Determine bump type from conventional commit prefixes.
+          # Priority: breaking > feat > patch.
+          BUMP="patch"
+          if echo "$COMMITS" | grep -qE '(^|\n)BREAKING CHANGE:|!:'; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qE '^feat(\(.+\))?:'; then
+            BUMP="minor"
+          fi
+
+          case "$BUMP" in
+            major) NEW_TAG="v$((MAJOR + 1)).0.0" ;;
+            minor) NEW_TAG="v${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+
+          echo "Latest tag: ${LATEST:-none}"
+          echo "Bump type:  $BUMP"
+          echo "New tag:    $NEW_TAG"
+
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+          echo "version=$NEW_TAG" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Configure git for private modules
+        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      # Vendor all dependencies. The Dockerfile uses -mod=vendor so no network access
+      # is needed at Docker build time. GONOSUMCHECK skips the public checksum DB for
+      # private modules (briefcase-internal is not listed on sum.golang.org).
+      - name: Vendor dependencies
+        env:
+          GOPRIVATE: github.com/raghav-anand/*
+          GONOSUMCHECK: github.com/raghav-anand/*
+        run: go mod vendor
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Build and push Docker image
+        run: |
+          VERSION="${{ needs.tag.outputs.version }}"
+          IMAGE="us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/briefcase/mcp-server:${VERSION}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy mcp-server \
+            --image "$IMAGE" \
+            --region us-central1 \
+            --project "${{ secrets.GCP_PROJECT_ID }}"

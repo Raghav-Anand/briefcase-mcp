@@ -1,0 +1,32 @@
+# Compiled binary
+mcp-server
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+
+# Go module cache / vendor (generated in CI, not committed)
+vendor/
+
+# Environment variable files
+.env
+.env.*
+*.env
+
+# Test coverage output
+coverage.out
+coverage.html
+
+# IDE / editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Claude AI docs (design docs, spec files — not part of the deployable code)
+claude-docs/
+.claude/
