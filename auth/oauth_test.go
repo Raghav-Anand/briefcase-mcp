@@ -1,28 +1,82 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// newTestHandler creates an OAuthHandler with dummy config (no real OAuth calls).
-func newTestHandler() *OAuthHandler {
-	return &OAuthHandler{
-		states:       make(map[string]pendingState),
-		codes:        make(map[string]pendingCode),
-		serverURL:    "https://example.com",
-		clientID:     "test-client-id",
-		clientSecret: "test-client-secret",
+// ── In-memory store for tests ─────────────────────────────────────────────────
+
+type memStore struct {
+	mu     sync.Mutex
+	states map[string]pendingState
+	codes  map[string]pendingCode
+}
+
+func newMemStore() *memStore {
+	return &memStore{
+		states: make(map[string]pendingState),
+		codes:  make(map[string]pendingCode),
 	}
 }
 
+func (m *memStore) saveState(_ context.Context, key string, s pendingState) error {
+	m.mu.Lock()
+	m.states[key] = s
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *memStore) getAndDeleteState(_ context.Context, key string) (pendingState, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.states[key]
+	if ok {
+		delete(m.states, key)
+	}
+	return s, ok, nil
+}
+
+func (m *memStore) saveCode(_ context.Context, key string, c pendingCode) error {
+	m.mu.Lock()
+	m.codes[key] = c
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *memStore) getAndDeleteCode(_ context.Context, key string) (pendingCode, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.codes[key]
+	if ok {
+		delete(m.codes, key)
+	}
+	return c, ok, nil
+}
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
+
+func newTestHandler() (*OAuthHandler, *memStore) {
+	store := newMemStore()
+	return &OAuthHandler{
+		serverURL:    "https://example.com",
+		clientID:     "test-client-id",
+		clientSecret: "test-client-secret",
+		store:        store,
+	}, store
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 func TestServeWellKnown(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
 	h.ServeWellKnown(w, r)
@@ -54,7 +108,7 @@ func TestServeWellKnown(t *testing.T) {
 }
 
 func TestServeAuthorize_MissingParams(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 
 	for _, tc := range []struct {
 		name  string
@@ -75,7 +129,7 @@ func TestServeAuthorize_MissingParams(t *testing.T) {
 }
 
 func TestServeAuthorize_UnsupportedChallengeMethod(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/oauth/authorize?code_challenge=abc&redirect_uri=https://cb&code_challenge_method=plain", nil)
 	h.ServeAuthorize(w, r)
@@ -85,7 +139,7 @@ func TestServeAuthorize_UnsupportedChallengeMethod(t *testing.T) {
 }
 
 func TestServeAuthorize_StoresStateAndRedirects(t *testing.T) {
-	h := newTestHandler()
+	h, store := newTestHandler()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/oauth/authorize?code_challenge=mychallenge&redirect_uri=https%3A%2F%2Fclaude.ai%2Fcb&state=client-state-42", nil)
 	h.ServeAuthorize(w, r)
@@ -94,15 +148,13 @@ func TestServeAuthorize_StoresStateAndRedirects(t *testing.T) {
 		t.Fatalf("expected redirect (302), got %d", w.Code)
 	}
 
-	// Verify state was stored.
-	h.mu.Lock()
-	stateCount := len(h.states)
-	h.mu.Unlock()
+	store.mu.Lock()
+	stateCount := len(store.states)
+	store.mu.Unlock()
 	if stateCount != 1 {
 		t.Errorf("expected 1 pending state, got %d", stateCount)
 	}
 
-	// Redirect should go to Google OAuth.
 	location := w.Header().Get("Location")
 	if !strings.Contains(location, "accounts.google.com") {
 		t.Errorf("expected redirect to Google OAuth, got: %s", location)
@@ -110,7 +162,7 @@ func TestServeAuthorize_StoresStateAndRedirects(t *testing.T) {
 }
 
 func TestServeToken_InvalidCode(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 
 	form := url.Values{
 		"grant_type": {"authorization_code"},
@@ -133,16 +185,13 @@ func TestServeToken_InvalidCode(t *testing.T) {
 }
 
 func TestServeToken_ExpiredCode(t *testing.T) {
-	h := newTestHandler()
+	h, store := newTestHandler()
 
-	// Plant a code that is already expired.
-	h.mu.Lock()
-	h.codes["old-code"] = pendingCode{
-		accessToken: "firebase-token",
-		redirectURI:   "https://claude.ai/cb",
-		createdAt:     time.Now().Add(-10 * time.Minute), // well past TTL
-	}
-	h.mu.Unlock()
+	store.saveCode(context.Background(), "old-code", pendingCode{
+		AccessToken: "google-id-token",
+		RedirectURI: "https://claude.ai/cb",
+		CreatedAt:   time.Now().Add(-10 * time.Minute), // well past TTL
+	})
 
 	form := url.Values{
 		"grant_type": {"authorization_code"},
@@ -159,16 +208,13 @@ func TestServeToken_ExpiredCode(t *testing.T) {
 }
 
 func TestServeToken_ValidCode(t *testing.T) {
-	h := newTestHandler()
+	h, store := newTestHandler()
 
-	// Plant a fresh valid code.
-	h.mu.Lock()
-	h.codes["good-code"] = pendingCode{
-		accessToken: "firebase-id-token-xyz",
-		redirectURI:   "https://claude.ai/cb",
-		createdAt:     time.Now(),
-	}
-	h.mu.Unlock()
+	store.saveCode(context.Background(), "good-code", pendingCode{
+		AccessToken: "google-id-token-xyz",
+		RedirectURI: "https://claude.ai/cb",
+		CreatedAt:   time.Now(),
+	})
 
 	form := url.Values{
 		"grant_type": {"authorization_code"},
@@ -185,7 +231,7 @@ func TestServeToken_ValidCode(t *testing.T) {
 
 	var resp map[string]any
 	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["access_token"] != "firebase-id-token-xyz" {
+	if resp["access_token"] != "google-id-token-xyz" {
 		t.Errorf("expected Google ID token as access_token, got: %v", resp["access_token"])
 	}
 	if resp["token_type"] != "Bearer" {
@@ -193,16 +239,16 @@ func TestServeToken_ValidCode(t *testing.T) {
 	}
 
 	// Code should be consumed (one-time use).
-	h.mu.Lock()
-	_, stillExists := h.codes["good-code"]
-	h.mu.Unlock()
+	store.mu.Lock()
+	_, stillExists := store.codes["good-code"]
+	store.mu.Unlock()
 	if stillExists {
 		t.Error("auth code should be deleted after successful exchange")
 	}
 }
 
 func TestServeToken_UnsupportedGrantType(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	form := url.Values{"grant_type": {"client_credentials"}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/oauth/token", strings.NewReader(form.Encode()))
@@ -215,11 +261,10 @@ func TestServeToken_UnsupportedGrantType(t *testing.T) {
 }
 
 func TestRegisterRoutes(t *testing.T) {
-	h := newTestHandler()
+	h, _ := newTestHandler()
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	// Verify well-known route is reachable.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/.well-known/oauth-authorization-server", nil)
 	mux.ServeHTTP(w, r)

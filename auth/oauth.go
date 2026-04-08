@@ -27,8 +27,37 @@ const (
 	oauthCodesCollection  = "oauth_codes"
 )
 
-// firestoreState is the Firestore representation of a pending OAuth state.
-type firestoreState struct {
+type pendingState struct {
+	CodeChallenge string
+	RedirectURI   string
+	ClientID      string
+	ClientState   string
+	CreatedAt     time.Time
+}
+
+type pendingCode struct {
+	AccessToken string
+	RedirectURI string
+	CreatedAt   time.Time
+}
+
+// oauthStore is the storage backend for short-lived OAuth states and codes.
+// The production implementation uses Firestore so the flow works across
+// multiple Cloud Run instances; tests use an in-memory implementation.
+type oauthStore interface {
+	saveState(ctx context.Context, key string, s pendingState) error
+	getAndDeleteState(ctx context.Context, key string) (pendingState, bool, error)
+	saveCode(ctx context.Context, key string, c pendingCode) error
+	getAndDeleteCode(ctx context.Context, key string) (pendingCode, bool, error)
+}
+
+// ── Firestore implementation ──────────────────────────────────────────────────
+
+type firestoreStore struct {
+	client *firestore.Client
+}
+
+type fsState struct {
 	CodeChallenge string    `firestore:"code_challenge"`
 	RedirectURI   string    `firestore:"redirect_uri"`
 	ClientID      string    `firestore:"client_id"`
@@ -36,24 +65,85 @@ type firestoreState struct {
 	CreatedAt     time.Time `firestore:"created_at"`
 }
 
-// firestoreCode is the Firestore representation of a pending auth code.
-type firestoreCode struct {
+type fsCode struct {
 	AccessToken string    `firestore:"access_token"`
 	RedirectURI string    `firestore:"redirect_uri"`
 	CreatedAt   time.Time `firestore:"created_at"`
 }
 
+func (f *firestoreStore) saveState(ctx context.Context, key string, s pendingState) error {
+	_, err := f.client.Collection(oauthStatesCollection).Doc(key).Set(ctx, fsState{
+		CodeChallenge: s.CodeChallenge,
+		RedirectURI:   s.RedirectURI,
+		ClientID:      s.ClientID,
+		ClientState:   s.ClientState,
+		CreatedAt:     s.CreatedAt,
+	})
+	return err
+}
+
+func (f *firestoreStore) getAndDeleteState(ctx context.Context, key string) (pendingState, bool, error) {
+	doc, err := f.client.Collection(oauthStatesCollection).Doc(key).Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return pendingState{}, false, nil
+		}
+		return pendingState{}, false, err
+	}
+	var fs fsState
+	if err := doc.DataTo(&fs); err != nil {
+		return pendingState{}, false, err
+	}
+	f.client.Collection(oauthStatesCollection).Doc(key).Delete(ctx)
+	return pendingState{
+		CodeChallenge: fs.CodeChallenge,
+		RedirectURI:   fs.RedirectURI,
+		ClientID:      fs.ClientID,
+		ClientState:   fs.ClientState,
+		CreatedAt:     fs.CreatedAt,
+	}, true, nil
+}
+
+func (f *firestoreStore) saveCode(ctx context.Context, key string, c pendingCode) error {
+	_, err := f.client.Collection(oauthCodesCollection).Doc(key).Set(ctx, fsCode{
+		AccessToken: c.AccessToken,
+		RedirectURI: c.RedirectURI,
+		CreatedAt:   c.CreatedAt,
+	})
+	return err
+}
+
+func (f *firestoreStore) getAndDeleteCode(ctx context.Context, key string) (pendingCode, bool, error) {
+	doc, err := f.client.Collection(oauthCodesCollection).Doc(key).Get(ctx)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return pendingCode{}, false, nil
+		}
+		return pendingCode{}, false, err
+	}
+	var fc fsCode
+	if err := doc.DataTo(&fc); err != nil {
+		return pendingCode{}, false, err
+	}
+	f.client.Collection(oauthCodesCollection).Doc(key).Delete(ctx)
+	return pendingCode{
+		AccessToken: fc.AccessToken,
+		RedirectURI: fc.RedirectURI,
+		CreatedAt:   fc.CreatedAt,
+	}, true, nil
+}
+
+// ── Handler ───────────────────────────────────────────────────────────────────
+
 // OAuthHandler implements the MCP OAuth 2.0 authorization server endpoints.
-// States and codes are persisted in Firestore so the flow works correctly
-// across multiple Cloud Run instances.
 type OAuthHandler struct {
 	serverURL    string
 	clientID     string
 	clientSecret string
-	fs           *firestore.Client
+	store        oauthStore
 }
 
-// NewOAuthHandler creates a handler with config from environment variables.
+// NewOAuthHandler creates a handler backed by Firestore for cross-instance state sharing.
 func NewOAuthHandler(ctx context.Context) *OAuthHandler {
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	fs, err := firestore.NewClient(ctx, projectID)
@@ -64,7 +154,7 @@ func NewOAuthHandler(ctx context.Context) *OAuthHandler {
 		serverURL:    os.Getenv("MCP_SERVER_URL"),
 		clientID:     os.Getenv("OAUTH_CLIENT_ID"),
 		clientSecret: os.Getenv("OAUTH_CLIENT_SECRET"),
-		fs:           fs,
+		store:        &firestoreStore{client: fs},
 	}
 }
 
@@ -111,12 +201,10 @@ func (h *OAuthHandler) ServeRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientID := uuid.New().String()
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]any{
-		"client_id":                  clientID,
+		"client_id":                  uuid.New().String(),
 		"client_id_issued_at":        time.Now().Unix(),
 		"redirect_uris":              req.RedirectURIs,
 		"grant_types":                req.GrantTypes,
@@ -126,7 +214,7 @@ func (h *OAuthHandler) ServeRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeAuthorize handles GET /oauth/authorize.
-// Stores PKCE state in Firestore and redirects the user to Google OAuth.
+// Stores PKCE state and redirects the user to Google OAuth.
 func (h *OAuthHandler) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	codeChallenge := q.Get("code_challenge")
@@ -145,15 +233,14 @@ func (h *OAuthHandler) ServeAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ourState := uuid.New().String()
-	_, err := h.fs.Collection(oauthStatesCollection).Doc(ourState).Set(r.Context(), firestoreState{
+	if err := h.store.saveState(r.Context(), ourState, pendingState{
 		CodeChallenge: codeChallenge,
 		RedirectURI:   redirectURI,
 		ClientID:      clientID,
 		ClientState:   clientState,
 		CreatedAt:     time.Now(),
-	})
-	if err != nil {
-		log.Printf("ServeAuthorize: store state: %v", err)
+	}); err != nil {
+		log.Printf("ServeAuthorize: save state: %v", err)
 		http.Error(w, "failed to store state", http.StatusInternalServerError)
 		return
 	}
@@ -186,26 +273,16 @@ func (h *OAuthHandler) ServeCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch and delete the pending state from Firestore.
-	stateRef := h.fs.Collection(oauthStatesCollection).Doc(ourState)
-	doc, err := stateRef.Get(r.Context())
+	pending, ok, err := h.store.getAndDeleteState(r.Context(), ourState)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			http.Error(w, "unknown or expired state", http.StatusBadRequest)
-		} else {
-			log.Printf("ServeCallback: get state: %v", err)
-			http.Error(w, "failed to retrieve state", http.StatusInternalServerError)
-		}
+		log.Printf("ServeCallback: get state: %v", err)
+		http.Error(w, "failed to retrieve state", http.StatusInternalServerError)
 		return
 	}
-	var pending firestoreState
-	if err := doc.DataTo(&pending); err != nil {
-		log.Printf("ServeCallback: decode state: %v", err)
-		http.Error(w, "failed to decode state", http.StatusInternalServerError)
+	if !ok {
+		http.Error(w, "unknown or expired state", http.StatusBadRequest)
 		return
 	}
-	stateRef.Delete(r.Context())
-
 	if time.Since(pending.CreatedAt) > oauthStateTTL {
 		http.Error(w, "state expired", http.StatusBadRequest)
 		return
@@ -219,13 +296,12 @@ func (h *OAuthHandler) ServeCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authCode := uuid.New().String()
-	_, err = h.fs.Collection(oauthCodesCollection).Doc(authCode).Set(r.Context(), firestoreCode{
+	if err := h.store.saveCode(r.Context(), authCode, pendingCode{
 		AccessToken: googleIDToken,
 		RedirectURI: pending.RedirectURI,
 		CreatedAt:   time.Now(),
-	})
-	if err != nil {
-		log.Printf("ServeCallback: store code: %v", err)
+	}); err != nil {
+		log.Printf("ServeCallback: save code: %v", err)
 		http.Error(w, "failed to store auth code", http.StatusInternalServerError)
 		return
 	}
@@ -256,28 +332,18 @@ func (h *OAuthHandler) ServeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch and delete the pending code from Firestore.
-	codeRef := h.fs.Collection(oauthCodesCollection).Doc(code)
-	doc, err := codeRef.Get(r.Context())
+	pending, ok, err := h.store.getAndDeleteCode(r.Context(), code)
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
-		} else {
-			log.Printf("ServeToken: get code: %v", err)
-			http.Error(w, "failed to retrieve code", http.StatusInternalServerError)
-		}
+		log.Printf("ServeToken: get code: %v", err)
+		http.Error(w, "failed to retrieve code", http.StatusInternalServerError)
 		return
 	}
-	var pending firestoreCode
-	if err := doc.DataTo(&pending); err != nil {
-		log.Printf("ServeToken: decode code: %v", err)
-		http.Error(w, "failed to decode code", http.StatusInternalServerError)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
 		return
 	}
-	codeRef.Delete(r.Context())
-
 	if time.Since(pending.CreatedAt) > oauthCodeTTL {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
