@@ -214,7 +214,6 @@ func (h *OAuthHandler) ServeWellKnown(w http.ResponseWriter, r *http.Request) {
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
-		"logo_uri":                              "https://storage.googleapis.com/briefcase-planner-static/logo.svg",
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metadata)
