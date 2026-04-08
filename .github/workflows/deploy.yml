@@ -21,7 +21,7 @@ jobs:
           go-version: "1.22"
 
       - name: Configure git for private modules
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
 
       - name: Run tests
         env:
@@ -108,7 +108,7 @@ jobs:
           go-version: "1.22"
 
       - name: Configure git for private modules
-        run: git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
 
       # Vendor all dependencies. The Dockerfile uses -mod=vendor so no network access
       # is needed at Docker build time. GONOSUMCHECK skips the public checksum DB for
