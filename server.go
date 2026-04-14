@@ -199,5 +199,48 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 		handlers.GetDoc(svc),
 	)
 
+	// --- Repos ---
+	s.AddTool(
+		mcp.NewTool("add_repo",
+			mcp.WithDescription("Link a repository to a project."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Repository name, e.g. 'briefcase-api'")),
+			mcp.WithString("url", mcp.Required(), mcp.Description("Repository URL, e.g. 'https://github.com/org/repo'")),
+			mcp.WithString("description", mcp.Description("Optional description of the repo's role")),
+			mcp.WithString("language", mcp.Description("Primary language, e.g. 'Go', 'TypeScript'")),
+		),
+		handlers.AddRepo(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("list_repos",
+			mcp.WithDescription("List all repositories linked to a project."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+		),
+		handlers.ListRepos(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("update_repo",
+			mcp.WithDescription("Update a linked repository. Only provided fields are changed."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("repo_id", mcp.Required(), mcp.Description("The repo ID (from list_repos)")),
+			mcp.WithString("name", mcp.Description("New repository name")),
+			mcp.WithString("url", mcp.Description("New repository URL")),
+			mcp.WithString("description", mcp.Description("New description")),
+			mcp.WithString("language", mcp.Description("New primary language")),
+		),
+		handlers.UpdateRepo(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("remove_repo",
+			mcp.WithDescription("Remove a linked repository from a project."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("repo_id", mcp.Required(), mcp.Description("The repo ID to remove")),
+		),
+		handlers.RemoveRepo(svc),
+	)
+
 	return s
 }
