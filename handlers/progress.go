@@ -31,6 +31,7 @@ func AddMilestone(svc *Services) server.ToolHandlerFunc {
 		}
 		description := req.GetString("description", "")
 		dueDateStr := req.GetString("due_date", "")
+		tasks := req.GetStringSlice("tasks", nil)
 
 		// Find active session for logging.
 		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
@@ -48,6 +49,7 @@ func AddMilestone(svc *Services) server.ToolHandlerFunc {
 			Title:       title,
 			Description: description,
 			SessionID:   sessionID,
+			Tasks:       tasks,
 		}
 		if dueDateStr != "" {
 			t, err := time.Parse(time.RFC3339, dueDateStr)
@@ -204,6 +206,170 @@ func LogDecision(svc *Services) server.ToolHandlerFunc {
 			"decision_id": did,
 			"message":     "Decision logged.",
 		})
+		return mcp.NewToolResultText(string(out)), nil
+	}
+}
+
+// UncompleteMilestone handles uncomplete_milestone.
+func UncompleteMilestone(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		claims := middleware.ClaimsFromContext(ctx)
+		if claims == nil {
+			return mcp.NewToolResultError("authentication required"), nil
+		}
+
+		pid, err := req.RequireString("project_id")
+		if err != nil {
+			return mcp.NewToolResultError("project_id is required"), nil
+		}
+		mid, err := req.RequireString("milestone_id")
+		if err != nil {
+			return mcp.NewToolResultError("milestone_id is required"), nil
+		}
+
+		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		_ = logToolCall(ctx, svc, claims.UID, pid, sessionID, "uncomplete_milestone", map[string]interface{}{
+			"project_id":   pid,
+			"milestone_id": mid,
+		})
+
+		if err := svc.DB.UncompleteMilestone(ctx, claims.UID, pid, mid); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to uncomplete milestone: %v", err)), nil
+		}
+
+		out, _ := json.Marshal(map[string]string{"message": "Milestone reopened."})
+		return mcp.NewToolResultText(string(out)), nil
+	}
+}
+
+// AddMilestoneTask handles add_milestone_task.
+func AddMilestoneTask(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		claims := middleware.ClaimsFromContext(ctx)
+		if claims == nil {
+			return mcp.NewToolResultError("authentication required"), nil
+		}
+
+		pid, err := req.RequireString("project_id")
+		if err != nil {
+			return mcp.NewToolResultError("project_id is required"), nil
+		}
+		mid, err := req.RequireString("milestone_id")
+		if err != nil {
+			return mcp.NewToolResultError("milestone_id is required"), nil
+		}
+		title, err := req.RequireString("title")
+		if err != nil {
+			return mcp.NewToolResultError("title is required"), nil
+		}
+
+		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		_ = logToolCall(ctx, svc, claims.UID, pid, sessionID, "add_milestone_task", map[string]interface{}{
+			"project_id":   pid,
+			"milestone_id": mid,
+		})
+
+		tid, err := svc.DB.AddMilestoneTask(ctx, claims.UID, pid, mid, title)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to add task: %v", err)), nil
+		}
+
+		out, _ := json.Marshal(map[string]string{
+			"task_id": tid,
+			"message": "Task added.",
+		})
+		return mcp.NewToolResultText(string(out)), nil
+	}
+}
+
+// CheckMilestoneTask handles check_milestone_task.
+func CheckMilestoneTask(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		claims := middleware.ClaimsFromContext(ctx)
+		if claims == nil {
+			return mcp.NewToolResultError("authentication required"), nil
+		}
+
+		pid, err := req.RequireString("project_id")
+		if err != nil {
+			return mcp.NewToolResultError("project_id is required"), nil
+		}
+		mid, err := req.RequireString("milestone_id")
+		if err != nil {
+			return mcp.NewToolResultError("milestone_id is required"), nil
+		}
+		tid, err := req.RequireString("task_id")
+		if err != nil {
+			return mcp.NewToolResultError("task_id is required"), nil
+		}
+		completed := req.GetBool("completed", true)
+
+		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		_ = logToolCall(ctx, svc, claims.UID, pid, sessionID, "check_milestone_task", map[string]interface{}{
+			"project_id":   pid,
+			"milestone_id": mid,
+			"task_id":      tid,
+			"completed":    completed,
+		})
+
+		if err := svc.DB.CheckMilestoneTask(ctx, claims.UID, pid, mid, tid, completed); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to update task: %v", err)), nil
+		}
+
+		out, _ := json.Marshal(map[string]string{"message": "Task updated."})
+		return mcp.NewToolResultText(string(out)), nil
+	}
+}
+
+// RemoveMilestoneTask handles remove_milestone_task.
+func RemoveMilestoneTask(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		claims := middleware.ClaimsFromContext(ctx)
+		if claims == nil {
+			return mcp.NewToolResultError("authentication required"), nil
+		}
+
+		pid, err := req.RequireString("project_id")
+		if err != nil {
+			return mcp.NewToolResultError("project_id is required"), nil
+		}
+		mid, err := req.RequireString("milestone_id")
+		if err != nil {
+			return mcp.NewToolResultError("milestone_id is required"), nil
+		}
+		tid, err := req.RequireString("task_id")
+		if err != nil {
+			return mcp.NewToolResultError("task_id is required"), nil
+		}
+
+		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		_ = logToolCall(ctx, svc, claims.UID, pid, sessionID, "remove_milestone_task", map[string]interface{}{
+			"project_id":   pid,
+			"milestone_id": mid,
+			"task_id":      tid,
+		})
+
+		if err := svc.DB.RemoveMilestoneTask(ctx, claims.UID, pid, mid, tid); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to remove task: %v", err)), nil
+		}
+
+		out, _ := json.Marshal(map[string]string{"message": "Task removed."})
 		return mcp.NewToolResultText(string(out)), nil
 	}
 }

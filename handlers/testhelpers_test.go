@@ -68,10 +68,14 @@ type fakeDB struct {
 	listDecisions      func(context.Context, string, string, int) ([]models.Decision, error)
 	listNotes          func(context.Context, string, string, string, int) ([]models.Note, error)
 	logToolCall        func(context.Context, string, string, string, *models.ToolCallEntry) error
-	addRepo            func(context.Context, string, string, *models.CreateRepoInput) (string, error)
-	listRepos          func(context.Context, string, string) ([]models.Repo, error)
-	updateRepo         func(context.Context, string, string, string, map[string]interface{}) error
-	removeRepo         func(context.Context, string, string, string) error
+	addRepo              func(context.Context, string, string, *models.CreateRepoInput) (string, error)
+	listRepos            func(context.Context, string, string) ([]models.Repo, error)
+	updateRepo           func(context.Context, string, string, string, map[string]interface{}) error
+	removeRepo           func(context.Context, string, string, string) error
+	uncompleteMilestone  func(context.Context, string, string, string) error
+	addMilestoneTask     func(context.Context, string, string, string, string) (string, error)
+	checkMilestoneTask   func(context.Context, string, string, string, string, bool) error
+	removeMilestoneTask  func(context.Context, string, string, string, string) error
 }
 
 func (f *fakeDB) UpsertUser(ctx context.Context, c *internalauth.Claims) error {
@@ -221,6 +225,31 @@ func (f *fakeDB) UpdateRepo(ctx context.Context, uid, pid, rid string, updates m
 func (f *fakeDB) RemoveRepo(ctx context.Context, uid, pid, rid string) error {
 	if f.removeRepo != nil {
 		return f.removeRepo(ctx, uid, pid, rid)
+	}
+	return nil
+}
+
+func (f *fakeDB) UncompleteMilestone(ctx context.Context, uid, pid, mid string) error {
+	if f.uncompleteMilestone != nil {
+		return f.uncompleteMilestone(ctx, uid, pid, mid)
+	}
+	return nil
+}
+func (f *fakeDB) AddMilestoneTask(ctx context.Context, uid, pid, mid, title string) (string, error) {
+	if f.addMilestoneTask != nil {
+		return f.addMilestoneTask(ctx, uid, pid, mid, title)
+	}
+	return "task-1", nil
+}
+func (f *fakeDB) CheckMilestoneTask(ctx context.Context, uid, pid, mid, taskID string, completed bool) error {
+	if f.checkMilestoneTask != nil {
+		return f.checkMilestoneTask(ctx, uid, pid, mid, taskID, completed)
+	}
+	return nil
+}
+func (f *fakeDB) RemoveMilestoneTask(ctx context.Context, uid, pid, mid, taskID string) error {
+	if f.removeMilestoneTask != nil {
+		return f.removeMilestoneTask(ctx, uid, pid, mid, taskID)
 	}
 	return nil
 }

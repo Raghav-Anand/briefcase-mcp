@@ -134,6 +134,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Milestone title, e.g. 'Deploy to production'")),
 			mcp.WithString("description", mcp.Description("Optional detail about the milestone")),
 			mcp.WithString("due_date", mcp.Description("Optional target date in RFC3339 or YYYY-MM-DD format")),
+			mcp.WithArray("tasks", mcp.Description("Optional list of task titles to pre-populate the milestone checklist"), mcp.WithStringItems()),
 		),
 		handlers.AddMilestone(svc),
 	)
@@ -145,6 +146,46 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID to complete")),
 		),
 		handlers.CompleteMilestone(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("uncomplete_milestone",
+			mcp.WithDescription("Re-open a completed milestone."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID to reopen")),
+		),
+		handlers.UncompleteMilestone(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("add_milestone_task",
+			mcp.WithDescription("Add a task (checklist item) to a milestone."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Task title")),
+		),
+		handlers.AddMilestoneTask(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("check_milestone_task",
+			mcp.WithDescription("Mark a milestone task as completed or incomplete."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID")),
+			mcp.WithString("task_id", mcp.Required(), mcp.Description("The task ID")),
+			mcp.WithBoolean("completed", mcp.Required(), mcp.Description("true to complete the task, false to uncheck it")),
+		),
+		handlers.CheckMilestoneTask(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("remove_milestone_task",
+			mcp.WithDescription("Remove a task from a milestone."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID")),
+			mcp.WithString("task_id", mcp.Required(), mcp.Description("The task ID to remove")),
+		),
+		handlers.RemoveMilestoneTask(svc),
 	)
 
 	s.AddTool(

@@ -5,7 +5,7 @@ go 1.23.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.47.0
-	github.com/raghav-anand/briefcase-internal v0.4.0
+	github.com/raghav-anand/briefcase-internal v0.5.0
 )
 
 require (

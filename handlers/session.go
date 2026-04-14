@@ -84,6 +84,8 @@ func StartSession(svc *Services) server.ToolHandlerFunc {
 			EndedAt   *time.Time `json:"ended_at,omitempty"`
 		}
 		type milestoneInfo struct {
+			ID      string     `json:"id"`
+			Seq     int        `json:"seq"`
 			Title   string     `json:"title"`
 			DueDate *time.Time `json:"due_date,omitempty"`
 		}
@@ -136,6 +138,8 @@ func StartSession(svc *Services) server.ToolHandlerFunc {
 		}
 		for _, m := range openMilestones {
 			response.OpenMilestones = append(response.OpenMilestones, milestoneInfo{
+				ID:      m.ID,
+				Seq:     m.Seq,
 				Title:   m.Title,
 				DueDate: m.DueDate,
 			})
