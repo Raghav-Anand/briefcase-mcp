@@ -25,7 +25,7 @@ type DBClient interface {
 	CreateMilestone(ctx context.Context, uid, pid string, m *models.CreateMilestoneInput) (string, error)
 	CompleteMilestone(ctx context.Context, uid, pid, mid string) error
 	UncompleteMilestone(ctx context.Context, uid, pid, mid string) error
-	AddMilestoneTask(ctx context.Context, uid, pid, mid, title string) (string, error)
+	AddMilestoneTask(ctx context.Context, uid, pid, mid, title, repoName string) (string, error)
 	CheckMilestoneTask(ctx context.Context, uid, pid, mid, taskID string, completed bool) error
 	RemoveMilestoneTask(ctx context.Context, uid, pid, mid, taskID string) error
 	CreateNote(ctx context.Context, uid, pid string, n *models.CreateNoteInput) (string, error)

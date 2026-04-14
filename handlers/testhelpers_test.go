@@ -73,7 +73,7 @@ type fakeDB struct {
 	updateRepo           func(context.Context, string, string, string, map[string]interface{}) error
 	removeRepo           func(context.Context, string, string, string) error
 	uncompleteMilestone  func(context.Context, string, string, string) error
-	addMilestoneTask     func(context.Context, string, string, string, string) (string, error)
+	addMilestoneTask     func(context.Context, string, string, string, string, string) (string, error)
 	checkMilestoneTask   func(context.Context, string, string, string, string, bool) error
 	removeMilestoneTask  func(context.Context, string, string, string, string) error
 }
@@ -235,9 +235,9 @@ func (f *fakeDB) UncompleteMilestone(ctx context.Context, uid, pid, mid string) 
 	}
 	return nil
 }
-func (f *fakeDB) AddMilestoneTask(ctx context.Context, uid, pid, mid, title string) (string, error) {
+func (f *fakeDB) AddMilestoneTask(ctx context.Context, uid, pid, mid, title, repoName string) (string, error) {
 	if f.addMilestoneTask != nil {
-		return f.addMilestoneTask(ctx, uid, pid, mid, title)
+		return f.addMilestoneTask(ctx, uid, pid, mid, title, repoName)
 	}
 	return "task-1", nil
 }

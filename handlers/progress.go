@@ -31,7 +31,12 @@ func AddMilestone(svc *Services) server.ToolHandlerFunc {
 		}
 		description := req.GetString("description", "")
 		dueDateStr := req.GetString("due_date", "")
-		tasks := req.GetStringSlice("tasks", nil)
+		// Parse tasks: accept array of {title, repo_name?} objects.
+		var tasks []models.MilestoneTaskInput
+		if raw, ok := req.GetArguments()["tasks"]; ok && raw != nil {
+			b, _ := json.Marshal(raw)
+			_ = json.Unmarshal(b, &tasks)
+		}
 
 		// Find active session for logging.
 		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
@@ -266,6 +271,7 @@ func AddMilestoneTask(svc *Services) server.ToolHandlerFunc {
 		if err != nil {
 			return mcp.NewToolResultError("title is required"), nil
 		}
+		repoName := req.GetString("repo_name", "")
 
 		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
 		sessionID := ""
@@ -277,7 +283,7 @@ func AddMilestoneTask(svc *Services) server.ToolHandlerFunc {
 			"milestone_id": mid,
 		})
 
-		tid, err := svc.DB.AddMilestoneTask(ctx, claims.UID, pid, mid, title)
+		tid, err := svc.DB.AddMilestoneTask(ctx, claims.UID, pid, mid, title, repoName)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("failed to add task: %v", err)), nil
 		}

@@ -93,6 +93,8 @@ github.com/raghav-anand/briefcase-internal v0.4.0 h1:k3Cg8MmiTife3cYG84p+uneDjoX
 github.com/raghav-anand/briefcase-internal v0.4.0/go.mod h1:yeTI6ct9IK5P8iB96BZDXFLYCjMxeNHo6uDtlytIjxY=
 github.com/raghav-anand/briefcase-internal v0.5.0 h1:OWRaVZh7Plxx+teaorCXvjDpeXG0ITc54FUpUWmeSWI=
 github.com/raghav-anand/briefcase-internal v0.5.0/go.mod h1:5VAVbe0BTsmqkIY2Twtmv+MPEs76z5IaBLtvW+LeS+k=
+github.com/raghav-anand/briefcase-internal v0.5.1 h1:jhAlf+0jvlx7IFz/cj82+waU65BKu0LDwSUBGr7wFnU=
+github.com/raghav-anand/briefcase-internal v0.5.1/go.mod h1:5VAVbe0BTsmqkIY2Twtmv+MPEs76z5IaBLtvW+LeS+k=
 github.com/rogpeppe/go-internal v1.9.0 h1:73kH8U+JUqXU8lRuOHeVHaa/SZPifC7BkcraZVejAe8=
 github.com/rogpeppe/go-internal v1.9.0/go.mod h1:WtVeX8xhTBvf0smdhujwtBcq4Qrzq/fJaraNFVN+nFs=
 github.com/spf13/cast v1.7.1 h1:cuNEagBQEHWN1FnbGEjCXL2szYEXqfJPbP2HNUaca9Y=

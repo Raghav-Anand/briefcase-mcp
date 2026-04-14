@@ -88,7 +88,7 @@ func TestAddMilestone(t *testing.T) {
 }
 
 func TestAddMilestoneTasks(t *testing.T) {
-	t.Run("passes tasks to CreateMilestoneInput", func(t *testing.T) {
+	t.Run("passes tasks with repo_name to CreateMilestoneInput", func(t *testing.T) {
 		var captured *models.CreateMilestoneInput
 		db := &fakeDB{
 			createMilestone: func(_ context.Context, _, _ string, m *models.CreateMilestoneInput) (string, error) {
@@ -100,14 +100,43 @@ func TestAddMilestoneTasks(t *testing.T) {
 		result, _ := AddMilestone(svc(db))(authedCtx("u"), req(map[string]any{
 			"project_id": "p1",
 			"title":      "Ship it",
-			"tasks":      []any{"Write tests", "Deploy to prod"},
+			"tasks": []any{
+				map[string]any{"title": "Write tests", "repo_name": "briefcase-mcp"},
+				map[string]any{"title": "Deploy to prod"},
+			},
 		}))
 
 		if result.IsError {
 			t.Fatalf("unexpected error: %s", resultText(result))
 		}
-		if len(captured.Tasks) != 2 || captured.Tasks[0] != "Write tests" || captured.Tasks[1] != "Deploy to prod" {
-			t.Errorf("unexpected tasks: %v", captured.Tasks)
+		if len(captured.Tasks) != 2 {
+			t.Fatalf("expected 2 tasks, got %d", len(captured.Tasks))
+		}
+		if captured.Tasks[0].Title != "Write tests" || captured.Tasks[0].RepoName != "briefcase-mcp" {
+			t.Errorf("unexpected task[0]: %+v", captured.Tasks[0])
+		}
+		if captured.Tasks[1].Title != "Deploy to prod" || captured.Tasks[1].RepoName != "" {
+			t.Errorf("unexpected task[1]: %+v", captured.Tasks[1])
+		}
+	})
+
+	t.Run("no tasks passes nil slice", func(t *testing.T) {
+		var captured *models.CreateMilestoneInput
+		db := &fakeDB{
+			createMilestone: func(_ context.Context, _, _ string, m *models.CreateMilestoneInput) (string, error) {
+				captured = m
+				return "ms-1", nil
+			},
+		}
+		result, _ := AddMilestone(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+			"title":      "Ship it",
+		}))
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", resultText(result))
+		}
+		if len(captured.Tasks) != 0 {
+			t.Errorf("expected no tasks, got %v", captured.Tasks)
 		}
 	})
 }
@@ -235,10 +264,11 @@ func TestUncompleteMilestone(t *testing.T) {
 
 func TestAddMilestoneTask(t *testing.T) {
 	t.Run("adds task and returns task_id", func(t *testing.T) {
-		var capturedTitle string
+		var capturedTitle, capturedRepo string
 		db := &fakeDB{
-			addMilestoneTask: func(_ context.Context, _, _, _, title string) (string, error) {
+			addMilestoneTask: func(_ context.Context, _, _, _, title, repoName string) (string, error) {
 				capturedTitle = title
+				capturedRepo = repoName
 				return "task-42", nil
 			},
 		}
@@ -247,6 +277,7 @@ func TestAddMilestoneTask(t *testing.T) {
 			"project_id":   "p1",
 			"milestone_id": "ms-1",
 			"title":        "Write unit tests",
+			"repo_name":    "briefcase-mcp",
 		}))
 
 		if result.IsError {
@@ -259,6 +290,28 @@ func TestAddMilestoneTask(t *testing.T) {
 		}
 		if capturedTitle != "Write unit tests" {
 			t.Errorf("expected title 'Write unit tests', got %q", capturedTitle)
+		}
+		if capturedRepo != "briefcase-mcp" {
+			t.Errorf("expected repo_name 'briefcase-mcp', got %q", capturedRepo)
+		}
+	})
+
+	t.Run("repo_name is optional", func(t *testing.T) {
+		var capturedRepo string
+		db := &fakeDB{
+			addMilestoneTask: func(_ context.Context, _, _, _, _, repoName string) (string, error) {
+				capturedRepo = repoName
+				return "task-1", nil
+			},
+		}
+		result, _ := AddMilestoneTask(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1", "milestone_id": "ms-1", "title": "t",
+		}))
+		if result.IsError {
+			t.Fatalf("unexpected error: %s", resultText(result))
+		}
+		if capturedRepo != "" {
+			t.Errorf("expected empty repo_name, got %q", capturedRepo)
 		}
 	})
 
@@ -273,7 +326,7 @@ func TestAddMilestoneTask(t *testing.T) {
 
 	t.Run("propagates db error", func(t *testing.T) {
 		db := &fakeDB{
-			addMilestoneTask: func(_ context.Context, _, _, _, _ string) (string, error) {
+			addMilestoneTask: func(_ context.Context, _, _, _, _, _ string) (string, error) {
 				return "", errors.New("db error")
 			},
 		}

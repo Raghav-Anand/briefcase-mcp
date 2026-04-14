@@ -134,7 +134,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Milestone title, e.g. 'Deploy to production'")),
 			mcp.WithString("description", mcp.Description("Optional detail about the milestone")),
 			mcp.WithString("due_date", mcp.Description("Optional target date in RFC3339 or YYYY-MM-DD format")),
-			mcp.WithArray("tasks", mcp.Description("Optional list of task titles to pre-populate the milestone checklist"), mcp.WithStringItems()),
+			mcp.WithArray("tasks", mcp.Description("Optional tasks to pre-populate the milestone checklist. Each item is an object with 'title' (string, required) and 'repo_name' (string, optional — must match a linked repo name).")),
 		),
 		handlers.AddMilestone(svc),
 	)
@@ -163,6 +163,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
 			mcp.WithString("milestone_id", mcp.Required(), mcp.Description("The milestone ID")),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Task title")),
+			mcp.WithString("repo_name", mcp.Description("Optional repo name this task belongs to (must match a linked repo)")),
 		),
 		handlers.AddMilestoneTask(svc),
 	)
