@@ -68,6 +68,10 @@ type fakeDB struct {
 	listDecisions      func(context.Context, string, string, int) ([]models.Decision, error)
 	listNotes          func(context.Context, string, string, string, int) ([]models.Note, error)
 	logToolCall        func(context.Context, string, string, string, *models.ToolCallEntry) error
+	addRepo            func(context.Context, string, string, *models.CreateRepoInput) (string, error)
+	listRepos          func(context.Context, string, string) ([]models.Repo, error)
+	updateRepo         func(context.Context, string, string, string, map[string]interface{}) error
+	removeRepo         func(context.Context, string, string, string) error
 }
 
 func (f *fakeDB) UpsertUser(ctx context.Context, c *internalauth.Claims) error {
@@ -193,6 +197,30 @@ func (f *fakeDB) ListNotes(ctx context.Context, uid, pid, noteType string, limit
 func (f *fakeDB) LogToolCall(ctx context.Context, uid, pid, sid string, entry *models.ToolCallEntry) error {
 	if f.logToolCall != nil {
 		return f.logToolCall(ctx, uid, pid, sid, entry)
+	}
+	return nil
+}
+func (f *fakeDB) AddRepo(ctx context.Context, uid, pid string, r *models.CreateRepoInput) (string, error) {
+	if f.addRepo != nil {
+		return f.addRepo(ctx, uid, pid, r)
+	}
+	return "repo-1", nil
+}
+func (f *fakeDB) ListRepos(ctx context.Context, uid, pid string) ([]models.Repo, error) {
+	if f.listRepos != nil {
+		return f.listRepos(ctx, uid, pid)
+	}
+	return nil, nil
+}
+func (f *fakeDB) UpdateRepo(ctx context.Context, uid, pid, rid string, updates map[string]interface{}) error {
+	if f.updateRepo != nil {
+		return f.updateRepo(ctx, uid, pid, rid, updates)
+	}
+	return nil
+}
+func (f *fakeDB) RemoveRepo(ctx context.Context, uid, pid, rid string) error {
+	if f.removeRepo != nil {
+		return f.removeRepo(ctx, uid, pid, rid)
 	}
 	return nil
 }

@@ -33,4 +33,8 @@ type DBClient interface {
 	ListNotes(ctx context.Context, uid, pid string, noteType string, limit int) ([]models.Note, error)
 	ListDocs(ctx context.Context, uid, pid string, docType *string) ([]models.RepoDocMeta, error)
 	LogToolCall(ctx context.Context, uid, pid, sid string, entry *models.ToolCallEntry) error
+	AddRepo(ctx context.Context, uid, pid string, r *models.CreateRepoInput) (string, error)
+	ListRepos(ctx context.Context, uid, pid string) ([]models.Repo, error)
+	UpdateRepo(ctx context.Context, uid, pid, rid string, updates map[string]interface{}) error
+	RemoveRepo(ctx context.Context, uid, pid, rid string) error
 }
