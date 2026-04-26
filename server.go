@@ -1,35 +1,31 @@
 package main
 
 import (
-	"context"
-
-	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/raghav-anand/briefcase-mcp/handlers"
 )
 
-const systemPrompt = `You are connected to the Briefcase MCP server — a project progress tracker.
+const systemPrompt = `You are connected to Briefcase — a project progress tracker. Maintain persistent context across sessions.
 
-Follow these rules:
+## Session start
+Call list_projects(), then start_session(project_id). The response contains: project metadata, last_session (summary + next_steps — start here), open_milestones (IDs + titles), recent_decisions, recent_notes, and repo_docs (title/type/format only — no content). Summarise for the user: what was last done, open milestones, what's next.
 
-1. At the START of any conversation where the user wants to work on a project:
-   - Call list_projects() to see available projects
-   - Ask which project to work on (or create a new one with create_project())
-   - Call start_session(project_id) to load full context
-   - Share the context summary with the user
+On a new project (no last_session): propose milestones with pre-populated tasks, link repos via add_repo(), create an architecture doc if the design is already clear.
 
-2. DURING the conversation:
-   - Call add_note() for important observations, findings, or progress
-   - Call log_decision() when a technical or design decision is made
-   - Call add_milestone() when new goals are identified
-   - Call complete_milestone() when goals are achieved
-   - Call upload_doc() when generating documentation, API references, or architecture diagrams
+## During the session
+- **Milestones**: add_milestone() for new goals; pre-populate tasks at creation. check_milestone_task() as work completes; complete_milestone() when all done.
+- **Notes**: add_note() for bugs, ideas, TODOs, and non-obvious findings. Don't duplicate decisions or milestones.
+- **Decisions**: log_decision() for architectural choices — library/tool selection, API design, DB schema, infra, auth. Not minor implementation details.
+- **Docs**: upload_doc() when generating or substantially revising architecture diagrams, API specs, READMEs, or design docs. Before uploading, check repo_docs from start_session or call list_docs() to get a doc_id — pass it to update in-place rather than creating a duplicate.
+- **Repos**: add_repo() when a repo is first mentioned; update_repo() on changes.
 
-3. At the END of the conversation (when the user is wrapping up):
-   - Call end_session() with a summary of what was accomplished, next steps, and any decisions made
-   - Confirm to the user that their progress has been saved
+Token rule: repo_docs is metadata only — never call get_doc() unless you need the full content.
 
-Always be transparent about what you're logging. The user should know their progress is being tracked.`
+## Session end
+Call end_session() with a 2–4 sentence summary, specific next_steps, and any inline decisions not separately logged. Confirm to the user that progress is saved.
+
+Never skip start_session() or end_session() — lost sessions lose context permanently.`
 
 // newMCPServer creates and fully configures the MCP server with all tools and prompts.
 func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
@@ -39,28 +35,13 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 		mcpserver.WithToolCapabilities(false),
 		mcpserver.WithPromptCapabilities(false),
 		mcpserver.WithRecovery(),
-		mcpserver.WithInstructions("If the Briefcase MCP server requires authentication, call the authenticate tool to get the OAuth URL, then immediately open it in the user's browser using the Bash tool: run `open <url>` on macOS or `xdg-open <url>` on Linux. Do not ask the user to open it manually."),
-	)
-
-	// --- System prompt ---
-	s.AddPrompt(
-		mcp.NewPrompt("briefcase_instructions",
-			mcp.WithPromptDescription("Instructions for using the Briefcase project tracker"),
-		),
-		func(_ context.Context, _ mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-			return mcp.NewGetPromptResult(
-				"Briefcase project tracker usage instructions",
-				[]mcp.PromptMessage{
-					mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(systemPrompt)),
-				},
-			), nil
-		},
+		mcpserver.WithInstructions(systemPrompt),
 	)
 
 	// --- Session management ---
 	s.AddTool(
 		mcp.NewTool("start_session",
-			mcp.WithDescription("Load full project context to start a working session. Call this at the beginning of every project conversation."),
+			mcp.WithDescription("Load full project context to start a working session. Returns: project metadata, last session summary + next_steps, open milestone IDs/titles, last 10 decisions, last 5 notes, and doc metadata (titles only — no content). Call this before any project work."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID to start a session for")),
 		),
 		handlers.StartSession(svc),
@@ -68,11 +49,11 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 
 	s.AddTool(
 		mcp.NewTool("end_session",
-			mcp.WithDescription("Save session progress and mark it complete. Call this when the user is done working."),
+			mcp.WithDescription("Save session progress and mark it complete. Call this whenever the user wraps up. The decisions array auto-logs each entry via log_decision — use it for quick decisions that weren't separately logged during the session."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
-			mcp.WithString("summary", mcp.Required(), mcp.Description("What was accomplished in this session")),
-			mcp.WithArray("next_steps", mcp.Description("What to do in the next session"), mcp.WithStringItems()),
-			mcp.WithArray("decisions", mcp.Description("Key decisions made during this session (will be logged)"), mcp.WithStringItems()),
+			mcp.WithString("summary", mcp.Required(), mcp.Description("2-4 sentences describing what was accomplished this session")),
+			mcp.WithArray("next_steps", mcp.Description("Specific, actionable items for the next session — not generic placeholders"), mcp.WithStringItems()),
+			mcp.WithArray("decisions", mcp.Description("Quick decisions made inline this session that weren't separately logged (each will be auto-logged)"), mcp.WithStringItems()),
 		),
 		handlers.EndSession(svc),
 	)
@@ -129,12 +110,12 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 	// --- Progress tracking ---
 	s.AddTool(
 		mcp.NewTool("add_milestone",
-			mcp.WithDescription("Add a milestone (goal) to a project."),
+			mcp.WithDescription("Add a milestone (goal) to a project. Pre-populate tasks at creation time to avoid extra round-trips. Each task can be linked to a specific repo."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Milestone title, e.g. 'Deploy to production'")),
-			mcp.WithString("description", mcp.Description("Optional detail about the milestone")),
+			mcp.WithString("description", mcp.Description("Optional detail about the milestone scope or acceptance criteria")),
 			mcp.WithString("due_date", mcp.Description("Optional target date in RFC3339 or YYYY-MM-DD format")),
-			mcp.WithArray("tasks", mcp.Description("Optional tasks to pre-populate the milestone checklist. Each item is an object with 'title' (string, required) and 'repo_name' (string, optional — must match a linked repo name).")),
+			mcp.WithArray("tasks", mcp.Description("Pre-populate the milestone checklist. Each item: {\"title\": string (required), \"repo_name\": string (optional, must match a linked repo name)}. Prefer pre-populating over separate add_milestone_task calls.")),
 		),
 		handlers.AddMilestone(svc),
 	)
@@ -191,20 +172,20 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 
 	s.AddTool(
 		mcp.NewTool("add_note",
-			mcp.WithDescription("Save a note about the project. Use for observations, bugs found, ideas, or todos."),
+			mcp.WithDescription("Save a note about the project. Use for bugs found, ideas, TODOs, and non-obvious findings. Don't duplicate things already captured as decisions or milestones."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
-			mcp.WithString("content", mcp.Required(), mcp.Description("Note content (markdown supported)")),
-			mcp.WithString("note_type", mcp.Description("Type: general | bug | idea | todo (default: general)")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("Note content (markdown supported). Be specific — vague notes have no value later.")),
+			mcp.WithString("note_type", mcp.Description("bug: something broken or wrong | idea: optimisation or future improvement | todo: action item without its own milestone | general: non-obvious finding or observation (default: general)")),
 		),
 		handlers.AddNote(svc),
 	)
 
 	s.AddTool(
 		mcp.NewTool("log_decision",
-			mcp.WithDescription("Log a technical or design decision with its rationale. Decisions are the most valuable long-term artifact."),
+			mcp.WithDescription("Log a technical or design decision with its rationale. These are permanent records — the most valuable long-term artifact in the system. Log when: a library/tool/framework is chosen, an API contract is designed, a DB schema is decided, a deployment or infra approach is settled, a security/auth approach is chosen. Don't log minor implementation details."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
-			mcp.WithString("decision", mcp.Required(), mcp.Description("The decision made, e.g. 'Chose Firestore over Cloud SQL'")),
-			mcp.WithString("rationale", mcp.Required(), mcp.Description("Why this decision was made")),
+			mcp.WithString("decision", mcp.Required(), mcp.Description("Specific decision made, e.g. 'Chose Firestore over Cloud SQL for the sessions collection'")),
+			mcp.WithString("rationale", mcp.Required(), mcp.Description("Why — constraints, tradeoffs, or context that drove the choice")),
 			mcp.WithArray("tags", mcp.Description("Optional tags for categorization, e.g. ['database', 'infrastructure']"), mcp.WithStringItems()),
 		),
 		handlers.LogDecision(svc),
@@ -213,12 +194,12 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 	// --- Documentation ---
 	s.AddTool(
 		mcp.NewTool("upload_doc",
-			mcp.WithDescription("Upload or update a project document (API reference, architecture, README, etc.). Pass doc_id to update an existing doc."),
+			mcp.WithDescription("Upload or update a project document. IMPORTANT: before creating a new doc, check repo_docs from start_session or call list_docs() — if a doc of the same type exists, get its doc_id and pass it here to update in-place rather than creating a duplicate. Docs under 500 KB are stored inline; larger docs go to Cloud Storage automatically."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
-			mcp.WithString("doc_id", mcp.Description("Existing doc ID to update (from list_docs). Omit to create a new doc.")),
-			mcp.WithString("title", mcp.Required(), mcp.Description("Document title, e.g. 'API Reference'")),
-			mcp.WithString("doc_type", mcp.Required(), mcp.Description("Type: api_docs | architecture | readme | custom")),
-			mcp.WithString("format", mcp.Required(), mcp.Description("Format: markdown | mermaid")),
+			mcp.WithString("doc_id", mcp.Description("ID of an existing doc to update (from list_docs). Omit only when creating a brand new doc.")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Document title, e.g. 'API Reference' or 'System Architecture'")),
+			mcp.WithString("doc_type", mcp.Required(), mcp.Description("api_docs: API specs/references | architecture: system/service diagrams | readme: onboarding/overview | custom: design docs, ADRs, runbooks")),
+			mcp.WithString("format", mcp.Required(), mcp.Description("markdown: prose, tables, code blocks | mermaid: diagrams (architecture, sequence, ERD)")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("Full document content")),
 		),
 		handlers.UploadDoc(svc),
@@ -226,7 +207,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 
 	s.AddTool(
 		mcp.NewTool("list_docs",
-			mcp.WithDescription("List documents for a project."),
+			mcp.WithDescription("List documents for a project — returns metadata only (id, title, doc_type, format, version, updated_at), no content. Use this to get doc_ids before updating an existing doc. start_session already returns doc metadata, so only call this mid-session when you need fresh IDs."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
 			mcp.WithString("doc_type", mcp.Description("Filter by type: api_docs | architecture | readme | custom")),
 		),
@@ -235,7 +216,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 
 	s.AddTool(
 		mcp.NewTool("get_doc",
-			mcp.WithDescription("Get the full content of a document."),
+			mcp.WithDescription("Get the full content of a document. May fetch from Cloud Storage for large docs — only call when you actually need to read the content. Use list_docs to check what exists first."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
 			mcp.WithString("doc_id", mcp.Required(), mcp.Description("The document ID (from list_docs)")),
 		),
@@ -254,11 +235,11 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 	// --- Repos ---
 	s.AddTool(
 		mcp.NewTool("add_repo",
-			mcp.WithDescription("Link a repository to a project."),
+			mcp.WithDescription("Link a repository to a project. Call this the first time a repo is mentioned. The repo name is used to link milestone tasks to specific repos, so use a consistent short name (e.g. 'briefcase-api', not the full URL)."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
-			mcp.WithString("name", mcp.Required(), mcp.Description("Repository name, e.g. 'briefcase-api'")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Short repo name, e.g. 'briefcase-api'. This is referenced by milestone tasks via repo_name — keep it consistent.")),
 			mcp.WithString("url", mcp.Required(), mcp.Description("Repository URL, e.g. 'https://github.com/org/repo'")),
-			mcp.WithString("description", mcp.Description("Optional description of the repo's role")),
+			mcp.WithString("description", mcp.Description("The repo's role in the project, e.g. 'REST API for the web dashboard'")),
 			mcp.WithString("language", mcp.Description("Primary language, e.g. 'Go', 'TypeScript'")),
 		),
 		handlers.AddRepo(svc),
