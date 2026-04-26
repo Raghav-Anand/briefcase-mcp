@@ -91,6 +91,101 @@ func TestUploadDoc(t *testing.T) {
 			t.Error("expected error when db fails")
 		}
 	})
+
+	t.Run("passes doc_id for update when provided", func(t *testing.T) {
+		var capturedDoc *models.DocInput
+		db := &fakeDB{
+			upsertDoc: func(_ context.Context, _, _ string, doc *models.DocInput, _ *storage.GCSClient) (string, string, error) {
+				capturedDoc = doc
+				return doc.ID, "inline", nil
+			},
+		}
+
+		result, err := UploadDoc(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+			"doc_id":     "existing-doc-99",
+			"title":      "Updated Doc",
+			"doc_type":   "readme",
+			"format":     "markdown",
+			"content":    "updated content",
+		}))
+
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected failure: err=%v, result=%s", err, resultText(result))
+		}
+		if capturedDoc.ID != "existing-doc-99" {
+			t.Errorf("expected doc ID 'existing-doc-99' passed to db, got %q", capturedDoc.ID)
+		}
+
+		var body map[string]any
+		json.Unmarshal([]byte(resultText(result)), &body)
+		if body["doc_id"] != "existing-doc-99" {
+			t.Errorf("expected doc_id 'existing-doc-99' in response, got %v", body["doc_id"])
+		}
+	})
+}
+
+func TestDeleteDoc(t *testing.T) {
+	t.Run("deletes doc and returns confirmation", func(t *testing.T) {
+		var capturedDocID string
+		db := &fakeDB{
+			deleteDoc: func(_ context.Context, _, _, did string, _ *storage.GCSClient) error {
+				capturedDocID = did
+				return nil
+			},
+		}
+
+		result, err := DeleteDoc(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+			"doc_id":     "doc-to-delete",
+		}))
+
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected failure: err=%v, result=%s", err, resultText(result))
+		}
+		if capturedDocID != "doc-to-delete" {
+			t.Errorf("expected doc_id 'doc-to-delete' passed to db, got %q", capturedDocID)
+		}
+
+		var body map[string]any
+		json.Unmarshal([]byte(resultText(result)), &body)
+		if body["message"] != "Doc deleted." {
+			t.Errorf("expected 'Doc deleted.' message, got %v", body["message"])
+		}
+	})
+
+	t.Run("requires project_id", func(t *testing.T) {
+		result, _ := DeleteDoc(svc(&fakeDB{}))(authedCtx("u"), req(map[string]any{
+			"doc_id": "d1",
+		}))
+		if !result.IsError {
+			t.Error("expected error when project_id missing")
+		}
+	})
+
+	t.Run("requires doc_id", func(t *testing.T) {
+		result, _ := DeleteDoc(svc(&fakeDB{}))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+		}))
+		if !result.IsError {
+			t.Error("expected error when doc_id missing")
+		}
+	})
+
+	t.Run("propagates db error", func(t *testing.T) {
+		db := &fakeDB{
+			deleteDoc: func(_ context.Context, _, _, _ string, _ *storage.GCSClient) error {
+				return errors.New("doc not found")
+			},
+		}
+		result, _ := DeleteDoc(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+			"doc_id":     "missing",
+		}))
+		if !result.IsError {
+			t.Error("expected error when db fails")
+		}
+	})
 }
 
 func TestListDocs(t *testing.T) {

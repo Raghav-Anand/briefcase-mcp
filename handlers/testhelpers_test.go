@@ -63,6 +63,7 @@ type fakeDB struct {
 	createDecision     func(context.Context, string, string, *models.CreateDecisionInput) (string, error)
 	upsertDoc          func(context.Context, string, string, *models.DocInput, *storage.GCSClient) (string, string, error)
 	getDoc             func(context.Context, string, string, string, *storage.GCSClient) (*models.RepoDoc, error)
+	deleteDoc          func(context.Context, string, string, string, *storage.GCSClient) error
 	listDocs           func(context.Context, string, string, *string) ([]models.RepoDocMeta, error)
 	listMilestones     func(context.Context, string, string, string) ([]models.Milestone, error)
 	listDecisions      func(context.Context, string, string, int) ([]models.Decision, error)
@@ -173,6 +174,12 @@ func (f *fakeDB) GetDoc(ctx context.Context, uid, pid, did string, gcs *storage.
 		return f.getDoc(ctx, uid, pid, did, gcs)
 	}
 	return &models.RepoDoc{ID: did, Title: "Test Doc", Format: "markdown", Content: "# Hello"}, nil
+}
+func (f *fakeDB) DeleteDoc(ctx context.Context, uid, pid, did string, gcs *storage.GCSClient) error {
+	if f.deleteDoc != nil {
+		return f.deleteDoc(ctx, uid, pid, did, gcs)
+	}
+	return nil
 }
 func (f *fakeDB) ListDocs(ctx context.Context, uid, pid string, docType *string) ([]models.RepoDocMeta, error) {
 	if f.listDocs != nil {

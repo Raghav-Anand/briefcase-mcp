@@ -213,8 +213,9 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 	// --- Documentation ---
 	s.AddTool(
 		mcp.NewTool("upload_doc",
-			mcp.WithDescription("Upload or update a project document (API reference, architecture, README, etc.)."),
+			mcp.WithDescription("Upload or update a project document (API reference, architecture, README, etc.). Pass doc_id to update an existing doc."),
 			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("doc_id", mcp.Description("Existing doc ID to update (from list_docs). Omit to create a new doc.")),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Document title, e.g. 'API Reference'")),
 			mcp.WithString("doc_type", mcp.Required(), mcp.Description("Type: api_docs | architecture | readme | custom")),
 			mcp.WithString("format", mcp.Required(), mcp.Description("Format: markdown | mermaid")),
@@ -239,6 +240,15 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("doc_id", mcp.Required(), mcp.Description("The document ID (from list_docs)")),
 		),
 		handlers.GetDoc(svc),
+	)
+
+	s.AddTool(
+		mcp.NewTool("delete_doc",
+			mcp.WithDescription("Delete a project document permanently. Also removes the file from Cloud Storage if applicable."),
+			mcp.WithString("project_id", mcp.Required(), mcp.Description("The project ID")),
+			mcp.WithString("doc_id", mcp.Required(), mcp.Description("The document ID (from list_docs)")),
+		),
+		handlers.DeleteDoc(svc),
 	)
 
 	// --- Repos ---

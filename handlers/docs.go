@@ -60,7 +60,10 @@ func UploadDoc(svc *Services) server.ToolHandlerFunc {
 			"doc_type":   docType,
 		})
 
+		existingDocID := req.GetString("doc_id", "")
+
 		docID, storageType, err := svc.DB.UpsertDoc(ctx, claims.UID, pid, &models.DocInput{
+			ID:        existingDocID,
 			Title:     title,
 			DocType:   docType,
 			Format:    format,
@@ -77,6 +80,42 @@ func UploadDoc(svc *Services) server.ToolHandlerFunc {
 			"storage": storageType,
 			"message": "Doc saved.",
 		})
+		return mcp.NewToolResultText(string(out)), nil
+	}
+}
+
+// DeleteDoc handles delete_doc. Removes the doc from Firestore and GCS if applicable.
+func DeleteDoc(svc *Services) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		claims := middleware.ClaimsFromContext(ctx)
+		if claims == nil {
+			return mcp.NewToolResultError("authentication required"), nil
+		}
+
+		pid, err := req.RequireString("project_id")
+		if err != nil {
+			return mcp.NewToolResultError("project_id is required"), nil
+		}
+		docID, err := req.RequireString("doc_id")
+		if err != nil {
+			return mcp.NewToolResultError("doc_id is required"), nil
+		}
+
+		session, _ := svc.DB.GetActiveSession(ctx, claims.UID, pid)
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		_ = logToolCall(ctx, svc, claims.UID, pid, sessionID, "delete_doc", map[string]interface{}{
+			"project_id": pid,
+			"doc_id":     docID,
+		})
+
+		if err := svc.DB.DeleteDoc(ctx, claims.UID, pid, docID, svc.GCS); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to delete doc: %v", err)), nil
+		}
+
+		out, _ := json.Marshal(map[string]string{"message": "Doc deleted."})
 		return mcp.NewToolResultText(string(out)), nil
 	}
 }

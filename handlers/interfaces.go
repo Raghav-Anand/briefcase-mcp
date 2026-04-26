@@ -32,6 +32,7 @@ type DBClient interface {
 	CreateDecision(ctx context.Context, uid, pid string, d *models.CreateDecisionInput) (string, error)
 	UpsertDoc(ctx context.Context, uid, pid string, doc *models.DocInput, gcs *storage.GCSClient) (string, string, error)
 	GetDoc(ctx context.Context, uid, pid, did string, gcs *storage.GCSClient) (*models.RepoDoc, error)
+	DeleteDoc(ctx context.Context, uid, pid, did string, gcs *storage.GCSClient) error
 	ListMilestones(ctx context.Context, uid, pid string, status string) ([]models.Milestone, error)
 	ListDecisions(ctx context.Context, uid, pid string, limit int) ([]models.Decision, error)
 	ListNotes(ctx context.Context, uid, pid string, noteType string, limit int) ([]models.Note, error)
