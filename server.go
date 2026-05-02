@@ -14,7 +14,7 @@ Call list_projects(), then start_session(project_id). The response contains: pro
 On a new project (no last_session): propose milestones with pre-populated tasks, link repos via add_repo(), create an architecture doc if the design is already clear.
 
 ## During the session
-- **Milestones**: add_milestone() for new goals; pre-populate tasks at creation. check_milestone_task() as work completes; complete_milestone() when all done.
+- **Milestones**: add_milestone() for new goals; pre-populate tasks at creation. check_milestone_task() automatically as each task is completed during the session — do not wait to be asked. Never call complete_milestone() — that is the human's decision.
 - **Notes**: add_note() for bugs, ideas, TODOs, and non-obvious findings. Don't duplicate decisions or milestones.
 - **Decisions**: log_decision() for architectural choices — library/tool selection, API design, DB schema, infra, auth. Not minor implementation details.
 - **Docs**: upload_doc() when generating or substantially revising architecture diagrams, API specs, READMEs, or design docs. Before uploading, check repo_docs from start_session or call list_docs() to get a doc_id — pass it to update in-place rather than creating a duplicate.
