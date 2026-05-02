@@ -55,6 +55,51 @@ func TestStartSession(t *testing.T) {
 		}
 	})
 
+	t.Run("includes summary and headings in repo_docs", func(t *testing.T) {
+		db := &fakeDB{
+			createSession: func(_ context.Context, _, _, _ string) (string, error) {
+				return "sess-new", nil
+			},
+			listSessions: func(_ context.Context, _, _ string, _ int, _ *time.Time) ([]models.Session, error) {
+				return []models.Session{{ID: "sess-old", Status: "completed"}}, nil
+			},
+			listDocs: func(_ context.Context, _, _ string, _ *string) ([]models.RepoDocMeta, error) {
+				return []models.RepoDocMeta{
+					{
+						ID:      "d1",
+						Title:   "Architecture",
+						DocType: "architecture",
+						Format:  "markdown",
+						Summary: "Service topology and data flow.",
+						Headings: []string{"Overview", "Services", "Data Flow"},
+					},
+				}, nil
+			},
+		}
+
+		result, err := StartSession(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "proj-1",
+		}))
+
+		if err != nil || result.IsError {
+			t.Fatalf("unexpected failure: err=%v, result=%s", err, resultText(result))
+		}
+		var body map[string]any
+		json.Unmarshal([]byte(resultText(result)), &body)
+		docs, ok := body["repo_docs"].([]any)
+		if !ok || len(docs) != 1 {
+			t.Fatalf("expected 1 repo_doc, got: %v", body["repo_docs"])
+		}
+		doc := docs[0].(map[string]any)
+		if doc["summary"] != "Service topology and data flow." {
+			t.Errorf("expected summary in repo_docs, got %v", doc["summary"])
+		}
+		headings, ok := doc["headings"].([]any)
+		if !ok || len(headings) != 3 {
+			t.Errorf("expected 3 headings in repo_docs, got %v", doc["headings"])
+		}
+	})
+
 	t.Run("requires authentication", func(t *testing.T) {
 		result, err := StartSession(svc(&fakeDB{}))(unauthCtx(), req(map[string]any{
 			"project_id": "proj-1",

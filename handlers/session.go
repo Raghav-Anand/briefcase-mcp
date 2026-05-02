@@ -103,6 +103,8 @@ func StartSession(svc *Services) server.ToolHandlerFunc {
 			Title     string    `json:"title"`
 			DocType   string    `json:"doc_type"`
 			Format    string    `json:"format"`
+			Summary   string    `json:"summary,omitempty"`
+			Headings  []string  `json:"headings,omitempty"`
 			UpdatedAt time.Time `json:"updated_at"`
 		}
 
@@ -163,6 +165,8 @@ func StartSession(svc *Services) server.ToolHandlerFunc {
 				Title:     doc.Title,
 				DocType:   doc.DocType,
 				Format:    doc.Format,
+				Summary:   doc.Summary,
+				Headings:  doc.Headings,
 				UpdatedAt: doc.UpdatedAt,
 			})
 		}

@@ -61,12 +61,14 @@ func UploadDoc(svc *Services) server.ToolHandlerFunc {
 		})
 
 		existingDocID := req.GetString("doc_id", "")
+		summary := req.GetString("summary", "")
 
 		docID, storageType, err := svc.DB.UpsertDoc(ctx, claims.UID, pid, &models.DocInput{
 			ID:        existingDocID,
 			Title:     title,
 			DocType:   docType,
 			Format:    format,
+			Summary:   summary,
 			Content:   content,
 			UpdatedBy: "claude",
 			SessionID: sessionID,

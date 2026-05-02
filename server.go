@@ -200,6 +200,7 @@ func newMCPServer(svc *handlers.Services) *mcpserver.MCPServer {
 			mcp.WithString("title", mcp.Required(), mcp.Description("Document title, e.g. 'API Reference' or 'System Architecture'")),
 			mcp.WithString("doc_type", mcp.Required(), mcp.Description("api_docs: API specs/references | architecture: system/service diagrams | readme: onboarding/overview | custom: design docs, ADRs, runbooks")),
 			mcp.WithString("format", mcp.Required(), mcp.Description("markdown: prose, tables, code blocks | mermaid: diagrams (architecture, sequence, ERD)")),
+			mcp.WithString("summary", mcp.Description("One-sentence description of the doc's purpose, shown in session context without loading the full content.")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("Full document content")),
 		),
 		handlers.UploadDoc(svc),

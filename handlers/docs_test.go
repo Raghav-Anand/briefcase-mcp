@@ -92,6 +92,29 @@ func TestUploadDoc(t *testing.T) {
 		}
 	})
 
+	t.Run("passes summary to db when provided", func(t *testing.T) {
+		var capturedDoc *models.DocInput
+		db := &fakeDB{
+			upsertDoc: func(_ context.Context, _, _ string, doc *models.DocInput, _ *storage.GCSClient) (string, string, error) {
+				capturedDoc = doc
+				return "doc-1", "inline", nil
+			},
+		}
+
+		UploadDoc(svc(db))(authedCtx("u"), req(map[string]any{
+			"project_id": "p1",
+			"title":      "API Reference",
+			"doc_type":   "api_docs",
+			"format":     "markdown",
+			"summary":    "REST API spec for the briefcase service.",
+			"content":    "# API\n\nEndpoints here.",
+		}))
+
+		if capturedDoc.Summary != "REST API spec for the briefcase service." {
+			t.Errorf("expected summary passed to db, got %q", capturedDoc.Summary)
+		}
+	})
+
 	t.Run("passes doc_id for update when provided", func(t *testing.T) {
 		var capturedDoc *models.DocInput
 		db := &fakeDB{

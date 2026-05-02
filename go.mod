@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/firestore v1.15.0
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.47.0
-	github.com/raghav-anand/briefcase-internal v0.5.2
+	github.com/raghav-anand/briefcase-internal v0.6.0
 	google.golang.org/grpc v1.62.1
 )
 
